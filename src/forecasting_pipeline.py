@@ -1,23 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-DATATHON 2026 - FINAL FORECASTING PIPELINE
-Reproducible, Constraint-Compliant Script
+"""Final VinDatathon forecasting pipeline.
+
+The script trains the production ensemble, writes diagnostic artifacts, and
+checks that the generated submission follows the competition schema.
 """
 
 # !pip install lightgbm prophet --quiet
 
+from pathlib import Path
+import logging
+import warnings
+
+import lightgbm as lgb
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
-from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import shap
 import xgboost as xgb
 from scipy.optimize import nnls
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
-import shap
-import matplotlib.pyplot as plt
-import warnings, logging
+
 warnings.filterwarnings("ignore")
 
 try:
@@ -30,22 +35,23 @@ except ImportError:
     HAS_PROPHET = False
     print("Prophet: NOT available — using HW fallback")
 
-np.random.seed(42)
 SEED = 42
+np.random.seed(SEED)
 
 
 
-from pathlib import Path
 DATA_DIR = Path('data/raw')
 OUT_DIR  = Path('outputs/submissions')
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 sales = pd.read_csv(DATA_DIR/'sales.csv', parse_dates=['Date'])
-sales['Y']  = sales.Date.dt.year
-sales['Q']  = sales.Date.dt.quarter
-sales['M']  = sales.Date.dt.month
-sales['DOW']= sales.Date.dt.dayofweek
-sales['day']= sales.Date.dt.day
+sales = sales.assign(
+    Y=sales.Date.dt.year,
+    Q=sales.Date.dt.quarter,
+    M=sales.Date.dt.month,
+    DOW=sales.Date.dt.dayofweek,
+    day=sales.Date.dt.day,
+)
 
 print(sales.shape, sales.Date.min().date(), '->', sales.Date.max().date())
 sales.head()
@@ -82,12 +88,12 @@ ax.legend(); plt.savefig(str(OUT_DIR / "feature_importance.png"))
 plt.close()
 
 PROMO_SCHEDULE = [
-    ('spring_sale',   3, 18, 30, 12, True),
-    ('mid_year',      6, 23, 29, 18, True),
-    ('fall_launch',   8, 30, 32, 10, True),
-    ('year_end',     11, 18, 45, 20, True),
-    ('urban_blowout', 7, 30, 33, None, 'odd'),
-    ('rural_special', 1, 30, 30, 15,   'odd'),
+    {'name': 'spring_sale',   'month': 3,  'day': 18, 'duration': 30, 'discount': 12,   'recurrence': True},
+    {'name': 'mid_year',      'month': 6,  'day': 23, 'duration': 29, 'discount': 18,   'recurrence': True},
+    {'name': 'fall_launch',   'month': 8,  'day': 30, 'duration': 32, 'discount': 10,   'recurrence': True},
+    {'name': 'year_end',      'month': 11, 'day': 18, 'duration': 45, 'discount': 20,   'recurrence': True},
+    {'name': 'urban_blowout', 'month': 7,  'day': 30, 'duration': 33, 'discount': None, 'recurrence': 'odd'},
+    {'name': 'rural_special', 'month': 1,  'day': 30, 'duration': 30, 'discount': 15,   'recurrence': 'odd'},
 ]
 
 TET_DATES = {
@@ -105,16 +111,17 @@ VN_FIXED_HOLIDAYS = [
 ]
 
 def build_features(dates):
-    df = pd.DataFrame({'Date': dates})
+    df = pd.DataFrame({'Date': pd.to_datetime(dates)})
     d = df['Date']
 
-    # Calendar
-    df['year']    = d.dt.year
-    df['month']   = d.dt.month
-    df['day']     = d.dt.day
-    df['dow']     = d.dt.dayofweek
-    df['doy']     = d.dt.dayofyear
-    df['quarter'] = d.dt.quarter
+    df = df.assign(
+        year=d.dt.year,
+        month=d.dt.month,
+        day=d.dt.day,
+        dow=d.dt.dayofweek,
+        doy=d.dt.dayofyear,
+        quarter=d.dt.quarter,
+    )
     df['is_weekend']    = (df['dow']>=5).astype(int)
     df['days_to_eom']   = d.dt.days_in_month - df['day']
     df['days_from_som'] = df['day'] - 1
@@ -173,7 +180,13 @@ def build_features(dates):
 
     # Promo windows
     yrs = sorted(set(df['year'].tolist()))
-    for (name, sm, sd, dur, disc, recur) in PROMO_SCHEDULE:
+    for promo in PROMO_SCHEDULE:
+        name = promo['name']
+        sm = promo['month']
+        sd = promo['day']
+        dur = promo['duration']
+        disc = promo['discount']
+        recur = promo['recurrence']
         in_prom = np.zeros(len(df), dtype=int)
         since   = np.full(len(df), -1.0)
         until   = np.full(len(df), -1.0)
@@ -812,32 +825,34 @@ print(f"COGS Mean    — Baseline: {baseline.COGS.mean():,.0f} | Upgraded: {upgr
 print(f"Margin       — Baseline: {baseline.COGS.sum()/baseline.Revenue.sum():.4f} | Upgraded: {upgraded.COGS.sum()/upgraded.Revenue.sum():.4f}")
 
 
-# Model summary table
-print('='*70)
-print('MODEL SUMMARY')
-print('='*70)
-print(f"{'Model':<20} {'Revenue Mean':>15} {'COGS Mean':>15}")
-print('-'*70)
-print(f"{'Ridge':<20} {p_rd_rev.mean():>15,.0f} {p_rd_cog.mean():>15,.0f}")
-print(f"{'LightGBM':<20} {p_lgb_rev.mean():>15,.0f} {p_lgb_cog.mean():>15,.0f}")
-print(f"{'XGBoost':<20} {p_xgb_rev.mean():>15,.0f} {p_xgb_cog.mean():>15,.0f}")
-print(f"{'Prophet':<20} {p_pr_rev.mean():>15,.0f} {p_pr_cog.mean():>15,.0f}")
-print(f"{'Holt-Winters':<20} {p_hw_rev.mean():>15,.0f} {p_hw_cog.mean():>15,.0f}")
-print(f"{'Q-Specialists':<20} {lgb_spec_rev.mean():>15,.0f} {lgb_spec_cog.mean():>15,.0f}")
-print('-'*70)
-print(f"{'v57 Baseline':<20} {baseline.Revenue.mean():>15,.0f} {baseline.COGS.mean():>15,.0f}")
-print(f"{'Upgraded Final':<20} {upgraded.Revenue.mean():>15,.0f} {upgraded.COGS.mean():>15,.0f}")
-print('='*70)
-print(f"\nNNLS Revenue weights: LGB={w_nnls_rev[0]:.3f}, Ridge={w_nnls_rev[1]:.3f}, XGB={w_nnls_rev[2]:.3f}")
-print(f"NNLS COGS weights:    LGB={w_nnls_cog[0]:.3f}, Ridge={w_nnls_cog[1]:.3f}, XGB={w_nnls_cog[2]:.3f}")
-print(f"\nFeatures used: {len(cols)}")
-print(f"Output files:")
-print(f"  - submission_v57_mp_blend30.csv (baseline)")
-print(f"  - submission_upgraded.csv (NNLS + XGB + HW)")
-print(f"  - shap_revenue_summary.png")
-print(f"  - shap_cogs_summary.png")
-print(f"  - feature_importance.png")
-print(f"  - baseline_vs_upgraded.png")
+# Final run card
+model_snapshot = pd.DataFrame([
+    ('Linear ridge anchor', p_rd_rev.mean(), p_rd_cog.mean()),
+    ('LightGBM core learner', p_lgb_rev.mean(), p_lgb_cog.mean()),
+    ('XGBoost diversity learner', p_xgb_rev.mean(), p_xgb_cog.mean()),
+    ('Prophet / HW event prior', p_pr_rev.mean(), p_pr_cog.mean()),
+    ('Holt-Winters seasonal prior', p_hw_rev.mean(), p_hw_cog.mean()),
+    ('Quarter-specialist LGB', lgb_spec_rev.mean(), lgb_spec_cog.mean()),
+    ('Official risk-adjusted final', upgraded.Revenue.mean(), upgraded.COGS.mean()),
+], columns=['component', 'avg_revenue', 'avg_cogs'])
+
+print('\n' + '=' * 76)
+print('FINAL FORECAST RUN CARD')
+print('=' * 76)
+print(model_snapshot.to_string(
+    index=False,
+    formatters={
+        'avg_revenue': '{:,.0f}'.format,
+        'avg_cogs': '{:,.0f}'.format,
+    },
+))
+print('-' * 76)
+print(f"Blend weights       | Revenue NNLS: LGB {w_nnls_rev[0]:.3f}, Ridge {w_nnls_rev[1]:.3f}, XGB {w_nnls_rev[2]:.3f}")
+print(f"                    | COGS NNLS:    LGB {w_nnls_cog[0]:.3f}, Ridge {w_nnls_cog[1]:.3f}, XGB {w_nnls_cog[2]:.3f}")
+print(f"Feature space       | {len(cols)} engineered predictors")
+print(f"Final margin ratio  | {upgraded.COGS.sum() / upgraded.Revenue.sum():.4f}")
+print('Artifacts written   | submission.csv, validation_report.csv, SHAP plots, feature importance, comparison plot')
+print('=' * 76)
 
 
 

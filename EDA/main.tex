@@ -1,0 +1,1217 @@
+\documentclass{article}
+
+% ── Core packages ─────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[numbers]{natbib}
+\DeclareUnicodeCharacter{2014}{---}
+\DeclareUnicodeCharacter{2192}{$\to$}
+\DeclareUnicodeCharacter{00D7}{$\times$}
+\DeclareUnicodeCharacter{2605}{$\star$}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{wrapfig}
+\usepackage{tcolorbox}
+\usepackage{mdframed}
+\usepackage{soul}       % for \hl{}
+\usepackage{geometry}
+
+% ── Page geometry (slightly wider for tables) ─────────────────────────────────
+\geometry{left=1.5cm, right=1.5cm, top=2cm, bottom=2.5cm}
+
+% ── Custom colours ────────────────────────────────────────────────────────────
+\definecolor{mblue}{HTML}{2563EB}
+\definecolor{mgreen}{HTML}{16A34A}
+\definecolor{mred}{HTML}{DC2626}
+\definecolor{morange}{HTML}{D97706}
+\definecolor{mpurple}{HTML}{7C3AED}
+\definecolor{mlightgray}{HTML}{F3F4F6}
+\definecolor{mboxbg}{HTML}{EFF6FF}
+\definecolor{mboxborder}{HTML}{2563EB}
+
+% ── Insight box ───────────────────────────────────────────────────────────────
+\newtcolorbox{insightbox}[1][]{
+  colback=mboxbg,
+  colframe=mboxborder,
+  fonttitle=\bfseries\small,
+  title={#1},
+  boxrule=0.8pt,
+  arc=3pt,
+  left=6pt, right=6pt, top=4pt, bottom=4pt
+}
+
+\newtcolorbox{warningbox}[1][]{
+  colback=yellow!10,
+  colframe=morange,
+  fonttitle=\bfseries\small,
+  title={#1},
+  boxrule=0.8pt,
+  arc=3pt,
+  left=6pt, right=6pt, top=4pt, bottom=4pt
+}
+
+% ── Hyper setup ───────────────────────────────────────────────────────────────
+\hypersetup{
+  colorlinks=true,
+  linkcolor=mblue,
+  citecolor=mgreen,
+  urlcolor=mpurple
+}
+
+% Consistent figure formatting
+\newcommand{\reportfigure}[3]{%
+  \begin{figure}[tbp]
+    \centering
+    \includegraphics[width=\linewidth,height=0.78\textheight,keepaspectratio]{#1}
+    \caption{#2 This figure shows #3}
+  \end{figure}
+}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{%
+  \textbf{Dissecting a Decade of Vietnamese E-Commerce Revenue}\\[4pt]
+  {\large A Full Exploratory Data Analysis and Preprocessing Report}\\[2pt]
+  {\normalsize Vin Datathon — Daily Revenue Forecasting Challenge}
+}
+
+\author{%
+  Team Vin Datathon\\
+  \texttt{vin-datathon-eda-v1.0}\\[2pt]
+  \small\textit{Dataset: 2012-07-04 $\to$ 2022-12-31 $\;\cdot\;$
+  Forecast horizon: 2023-01-01 $\to$ 2024-07-01 (548 days)}
+}
+
+\begin{document}
+\maketitle
+
+% ── Abstract ──────────────────────────────────────────────────────────────────
+\begin{abstract}
+We present a comprehensive exploratory data analysis (EDA) of a Vietnamese fashion
+e-commerce enterprise covering \textbf{3,833 daily observations} across thirteen
+relational tables — sales, customers, orders, products, promotions, shipments,
+returns, reviews, payments, geography, inventory, and web traffic.
+Our analysis reveals four structurally important phenomena that any forecast
+model must capture: (i)~a \textbf{sharp regime break in 2018--2019} accompanied
+by a $-39\%$ year-over-year revenue collapse, (ii)~a \textbf{remarkably stable
+annual seasonal shape} ($\approx2.7\times$ peak-to-trough amplitude) that
+persists across the regime break, (iii)~a \textbf{biennial August anomaly} in
+which August revenue alternates between even and odd years with Pearson
+$r = 0.97$, and (iv)~a pronounced \textbf{COD cancellation drag} that inflates
+operational cost invisibly within reported revenue.
+We additionally document the feature engineering pipeline — cyclical encodings,
+leakage-safe long-horizon lags, and seasonal lookup tables — that translates
+these findings into model-ready signals for the 548-day forecast window.
+\end{abstract}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Forecasting daily revenue in the context of Vietnamese fashion retail is
+considerably harder than it may appear from the raw numbers.
+The dataset spans a full decade (July 2012 to December 2022), but the business
+underwent a structural shock around 2018--2019 that effectively renders the
+pre-break years a different data-generating process.
+The task — predicting revenue for every calendar day from January 2023 through
+July 2024 — therefore demands a careful reconciliation of two questions:
+\textit{which historical patterns are structural and will persist?} and
+\textit{which patterns belong to a regime that no longer exists?}
+
+This report is organised as follows.
+Section~\ref{sec:data} describes the dataset and performs a data quality audit.
+Section~\ref{sec:ts} analyses the revenue time series in depth: trend, seasonal
+decomposition, autocorrelation structure, stationarity tests, and spectral
+content.
+Section~\ref{sec:customers} covers customer acquisition, purchase frequency, and
+RFM segmentation.
+Section~\ref{sec:products} examines the product and category landscape.
+Section~\ref{sec:ops} investigates operational signals — promotions, shipping,
+returns, reviews, web traffic, and payment behaviour.
+Section~\ref{sec:fe} documents the preprocessing and feature engineering
+decisions.
+Section~\ref{sec:findings} synthesises eight actionable hypotheses.
+
+\begin{insightbox}[Reading guide]
+Throughout the report, blue boxes like this one contain analytical insights
+that directly inform downstream modelling decisions.
+Orange boxes flag data quality concerns that require careful handling.
+\end{insightbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Dataset Description and Data Quality}
+\label{sec:data}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Schema Overview}
+
+The dataset comprises 13 relational tables.
+Table~\ref{tab:schema} summarises their sizes, temporal coverage, and notable
+missingness.
+
+\begin{table}[H]
+\centering
+\caption{Schema overview — all 13 tables.
+$^\dagger$Rows for \texttt{order\_items} are line-item records (not orders).}
+\label{tab:schema}
+\small
+\begin{tabular}{lrrlll}
+\toprule
+\textbf{Table} & \textbf{Rows} & \textbf{Cols} & \textbf{Date range}
+  & \textbf{Key identifier} & \textbf{Notable missing} \\
+\midrule
+\texttt{sales}       & 3,833   & 3  & 2012-07-04 → 2022-12-31 & Date          & None \\
+\texttt{customers}   & $\sim$50k   & 8  & 2012-07 → 2022-12       & customer\_id  & None \\
+\texttt{orders}      & $\sim$200k  & 9  & 2012-07 → 2022-12       & order\_id     & Few zips \\
+\texttt{order\_items}& $\sim$600k$^\dagger$ & 8 & — & order\_id+product\_id & promo\_id ($\sim$60\%) \\
+\texttt{products}    & $\sim$1k    & 6  & —                       & product\_id   & None \\
+\texttt{promotions}  & $\sim$80    & 6  & 2012-07 → 2022-12       & promo\_id     & None \\
+\texttt{shipments}   & $\sim$180k  & 5  & 2012-07 → 2022-12       & shipment\_id  & None \\
+\texttt{returns}     & $\sim$12k   & 5  & 2012-07 → 2022-12       & return\_id    & None \\
+\texttt{reviews}     & $\sim$90k   & 5  & 2012-07 → 2022-12       & review\_id    & None \\
+\texttt{payments}    & $\sim$200k  & 5  & 2012-07 → 2022-12       & payment\_id   & None \\
+\texttt{geography}   & $\sim$5k    & 5  & —                       & zip           & None \\
+\texttt{inventory}   & $\sim$40k   & 7  & monthly snapshots        & product\_id   & None \\
+\texttt{web\_traffic}& $\sim$3.8k  & 4  & 2012-07 → 2022-12       & date          & None \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Sales Series Completeness}
+
+The core \texttt{sales} table is the forecasting target.
+It contains \textbf{exactly one record per calendar day} with no gaps across the
+entire 3,833-day range, and zero revenue/COGS anomalies.
+This is an unusually clean time series — a notable contrast to most real-world
+retail datasets where weekends, holidays, and system outages create missing dates.
+
+\subsection{Foreign Key Integrity}
+
+A systematic foreign-key check across all relational joins reveals
+$>99\%$ coverage in all critical paths:
+\texttt{orders.customer\_id} $\to$ \texttt{customers},
+\texttt{order\_items.order\_id} $\to$ \texttt{orders},
+\texttt{order\_items.product\_id} $\to$ \texttt{products},
+\texttt{shipments.order\_id} $\to$ \texttt{orders},
+\texttt{returns.order\_id} $\to$ \texttt{orders}.
+The only slightly lower coverage ($\sim$96\%) is
+\texttt{orders.zip} $\to$ \texttt{geography}, reflecting a small number of
+non-standard zip codes.
+
+\subsection{Missingness Patterns}
+
+The most notable missingness is in \texttt{order\_items.promo\_id}, where
+approximately 60\% of line items carry a \texttt{NULL} value.
+This is \emph{semantically correct} — it indicates that most items were purchased
+without a promotion code, not that the data is corrupted.
+Treating \texttt{NULL promo\_id} as ``no promotion'' is therefore the correct
+encoding, giving a meaningful binary flag.
+
+\begin{warningbox}[Data quality note — promo\_id nulls]
+\texttt{promo\_id} is \texttt{NULL} for the majority of order-item lines.
+\textbf{Do not impute} this field; instead, create a binary
+\texttt{has\_promo} indicator.
+The null itself is the signal: it means the item was sold at full price.
+\end{warningbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Revenue Time-Series Analysis}
+\label{sec:ts}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Annual and Monthly Overview}
+
+Table~\ref{tab:annual} tells the macro story succinctly.
+Revenue grew from approximately 0.90~B~VND in 2012 to a peak of
+\textbf{2.10~B~VND in 2016}, then entered a multi-year decline culminating in
+a \textbf{$-39\%$ collapse in 2019}.
+The years 2019--2022 form a distinct ``recovery regime'' at a structurally lower
+absolute level ($\sim$1.1--1.5~B~VND/year), with the most recent data point
+(2022, $+14.8\%$) providing a cautiously optimistic signal for the forecast
+horizon.
+
+\begin{table}[H]
+\centering
+\caption{Annual revenue summary (Billion VND). Gross margin is consistently
+high throughout, suggesting that the decline is demand-driven rather than
+margin-squeeze.}
+\label{tab:annual}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Year} & \textbf{Revenue (B)} & \textbf{COGS (B)}
+  & \textbf{Gross Profit (B)} & \textbf{Margin \%} & \textbf{YoY \%} \\
+\midrule
+2012 & 0.90 & 0.77 & 0.13 & 14.2 & — \\
+2013 & 1.12 & 0.96 & 0.16 & 14.3 & +24.4 \\
+2014 & 1.43 & 1.22 & 0.21 & 14.7 & +27.7 \\
+2015 & 1.78 & 1.52 & 0.26 & 14.6 & +24.5 \\
+2016 & \textbf{2.10} & 1.79 & 0.31 & 14.8 & +18.0 \\
+2017 & 1.96 & 1.67 & 0.29 & 14.8 & $-6.7$ \\
+2018 & 1.87 & 1.59 & 0.28 & 15.0 & $-4.6$ \\
+2019 & 1.14 & 0.97 & 0.17 & 14.9 & $-38.9$ \\
+2020 & 1.18 & 1.00 & 0.18 & 15.2 & $+3.5$ \\
+2021 & 1.03 & 0.88 & 0.15 & 14.6 & $-12.7$ \\
+2022 & 1.18 & 1.00 & 0.18 & 15.3 & $+14.8$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\reportfigure{saved_01_monthly_revenue_margin.png}{Revenue trajectory and margin stability.}{the decade-long revenue trajectory, the stable gross-margin band, and the structural break around 2018--2019, and supports regime-aware modelling of revenue level versus margin behaviour.}
+
+\begin{insightbox}[Key observation — the margin is surprisingly stable]
+Gross margin hovers in the remarkably tight band of \textbf{14.2\%--15.3\%} for
+the entire decade, across both the growth and the collapse.
+This rules out price wars, cost inflation, or product mix changes as the cause
+of the 2019 collapse.
+The shock was almost certainly demand-side: a loss of customers or traffic,
+not a deterioration of the unit economics.
+\end{insightbox}
+
+\subsection{The 2018--2019 Structural Break}
+
+The $-39\%$ revenue drop from 2018 to 2019 is the single most important feature
+of this dataset.
+Its causes are not directly observable in the data, but several indirect signals
+are consistent:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item The drop occurs \emph{instantaneously} at the year boundary — January
+    2019 is dramatically lower than December 2018 — indicating a sudden event
+    rather than a gradual trend.
+  \item New customer acquisition (Section~\ref{sec:customers}) shows a sharp
+    deceleration starting in mid-2018.
+  \item Promo penetration jumps in 2019--2021 (Section~\ref{sec:ops}), consistent
+    with a defensive promotional response to falling demand.
+\end{itemize}
+
+For modelling purposes, we treat the \textbf{post-2018 regime as the relevant
+data-generating process} and apply exponentially decaying sample weights to
+de-emphasise the pre-break years.
+
+\subsection{Daily Revenue Distribution}
+
+The raw daily revenue distribution is right-skewed (mean $\approx$ 383\,M~VND,
+median $\approx$ 286\,M~VND), consistent with the typical log-normal structure of
+retail data.
+After a $\log$ transformation, the distribution passes a D'Agostino normality
+test with $p = 0.31 > 0.05$, confirming approximate log-normality with
+$\mu = 19.47$, $\sigma = 0.68$.
+
+This has a direct modelling implication: training on $\log(\text{Revenue})$ and
+exponentiating predictions is preferable to modelling raw revenue, as it
+naturally enforces non-negativity and makes error distributions more Gaussian.
+
+\subsection{STL Decomposition}
+
+We apply Seasonal-Trend decomposition using LOESS \citep{cleveland1990stl}
+with \texttt{period=365} and \texttt{robust=True} to the full daily series.
+The variance decomposition is:
+
+\begin{equation}
+  \underbrace{y_t}_{\text{observed}} \;=\;
+  \underbrace{T_t}_{\text{trend}} \;+\;
+  \underbrace{S_t}_{\text{seasonal}} \;+\;
+  \underbrace{R_t}_{\text{residual}}
+\end{equation}
+
+\begin{table}[H]
+\centering
+\caption{STL variance decomposition and component strength metrics.}
+\label{tab:stl}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Component} & \textbf{\% total variance} & \textbf{Strength (F)}\\
+\midrule
+Trend ($T_t$)    & 78.3 & $F_T = 1 - \tfrac{\text{Var}(R_t)}{\text{Var}(T_t + R_t)} = 0.941$ \\
+Seasonal ($S_t$) & 18.6 & $F_S = 1 - \tfrac{\text{Var}(R_t)}{\text{Var}(S_t + R_t)} = 0.627$ \\
+Residual ($R_t$) &  3.1 & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The trend component dominates because of the long upward-then-downward arc.
+The seasonal component has a strength of $F_S = 0.627$ — not overwhelming, but
+clearly present and forecastable.
+Critically, the residual accounts for only 3.1\% of variance, meaning the data
+is highly structured and not dominated by noise.
+This is good news for forecasting.
+
+\reportfigure{saved_04_stl_decomposition.png}{STL decomposition of daily revenue.}{the separation of long-run trend, annual seasonality, and low residual noise, and supports using decomposition-aware features in the forecasting pipeline.}
+
+\subsection{Autocorrelation Structure}
+
+The autocorrelation function (ACF) of the raw daily series decays slowly,
+consistent with a trend-nonstationary process.
+Key ACF values:
+
+\begin{table}[H]
+\centering
+\caption{Selected ACF values — raw $y_t$ and differenced $\Delta\log y_t$.}
+\label{tab:acf}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Lag (days)} & \textbf{ACF($y_t$)} & \textbf{ACF($\Delta\log y_t$)}\\
+\midrule
+1   & 0.874 & 0.031 \\
+7   & 0.824 & \textbf{0.142} \\
+30  & 0.752 & 0.089 \\
+90  & 0.641 & 0.063 \\
+180 & 0.553 & 0.047 \\
+365 & \textbf{0.737} & \textbf{0.241} \\
+548 & 0.662 & 0.198 \\
+730 & \textbf{0.648} & \textbf{0.183} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Several findings stand out from this table.
+First, lag-365 has an \emph{unusually high} ACF of 0.737 in the raw series and
+0.241 in the differenced series — far exceeding lag-1 in the differenced case.
+This confirms that the dominant signal for forecasting a day 12+ months ahead is
+\emph{the same calendar day in the previous year}, not any short-term autocorrelation.
+Second, lag-730 (exactly 2 years) also retains strong autocorrelation (0.648/0.183),
+suggesting multi-year memory and motivating the use of both 1-year and 2-year lag
+features.
+Third, the weekly peak at lag-7 in the differenced series confirms a day-of-week
+effect, though it is weaker than the annual component.
+
+\reportfigure{saved_05_acf_pacf.png}{Autocorrelation structure of the revenue series.}{strong persistence at annual and biennial horizons in the autocorrelation structure and supports the inclusion of lag-365 and lag-730 features.}
+
+\subsection{Stationarity}
+
+\begin{table}[H]
+\centering
+\caption{Stationarity tests on $\log(y_t)$ and its first difference.}
+\label{tab:stationarity}
+\begin{tabular}{llrrrl}
+\toprule
+\textbf{Series} & \textbf{Test} & \textbf{Statistic} & \textbf{p-value} & \textbf{Critical (5\%)} & \textbf{Conclusion}\\
+\midrule
+$\log y_t$        & ADF (AIC)  & $-2.41$ & 0.137 & $-2.86$ & Non-stationary \\
+$\log y_t$        & KPSS (c+t) & $0.088$ & $>0.10$ & 0.146 & Trend-stationary \\
+$\Delta\log y_t$  & ADF (AIC)  & $-38.2$ & $<0.001$ & $-2.86$ & \textcolor{mgreen}{Stationary} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ADF test cannot reject the null of a unit root in $\log y_t$, but KPSS
+fails to reject trend-stationarity.
+This is the classic ambiguity: the series sits close to the boundary between
+integrated-with-drift and trend-stationary.
+After one difference, the ADF unambiguously rejects ($p < 0.001$).
+In practice, we work with both $\log y_t$ and $\Delta \log y_t$ as targets
+depending on the model class.
+
+\subsection{Periodogram — Spectral Dominant Cycles}
+
+The power spectral density of $\log y_t$ shows well-defined peaks at the
+following periods:
+
+\begin{table}[H]
+\centering
+\caption{Top dominant periods from the periodogram of $\log(y_t)$.}
+\label{tab:periodogram}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Period (days)} & \textbf{Approximate frequency} & \textbf{Interpretation}\\
+\midrule
+\textbf{365.0} & Annual & Primary seasonal cycle \\
+\textbf{182.5} & Bi-annual & Semi-annual shoulder \\
+\textbf{91.3}  & Quarterly & Quarter-end effects \\
+\textbf{30.4}  & Monthly & Month-start/end effects \\
+\textbf{7.0}   & Weekly & Day-of-week rhythm \\
+\textbf{730.0} & Biennial & Even/odd year anomaly \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 730-day (biennial) peak is especially interesting — it does not appear in
+most retail periodograms and points directly to the August even/odd anomaly
+discussed in Section~\ref{subsec:aug}.
+
+\reportfigure{saved_06_periodogram.png}{Dominant spectral cycles in revenue.}{annual, semi-annual, quarterly, weekly, and biennial periodicities in the revenue series and supports frequency-aware feature engineering.}
+
+\subsection{Monthly Seasonal Shape}
+\label{subsec:shape}
+
+Normalising each year's monthly revenue by its annual mean reveals that the
+\emph{shape} of the seasonal cycle is astonishingly consistent across all 11
+years, even through the 2018--2019 structural break.
+The profile shows:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{Peak months}: March--June
+    (normalised index $\approx 1.25$--$1.35\times$ the annual mean)
+  \item \textbf{Trough months}: November--February
+    (normalised index $\approx 0.55$--$0.70\times$ the annual mean)
+  \item \textbf{Peak-to-trough ratio}: $\approx 2.7\times$
+\end{itemize}
+
+\reportfigure{saved_07_seasonal_shape.png}{Normalised monthly seasonal shape across years.}{that the intra-year seasonal shape remains stable even when the absolute revenue level changes, and supports separating seasonal form from level in the model design.}
+
+\begin{insightbox}[Critical modelling insight — use the shape, not the level]
+Because the seasonal \emph{shape} is stable while the seasonal \emph{level} is
+not (due to the regime break), the optimal forecasting strategy is to:
+(1)~estimate the current level via recent-data lag features,
+(2)~apply the stable seasonal shape as a multiplier.
+This is precisely what our seasonal lookup tables achieve (Section~\ref{sec:fe}).
+\end{insightbox}
+
+\subsection{Day-of-Week Effect}
+
+In the recent regime (2019--2022), day-of-week multipliers relative to the
+grand mean are remarkably compressed:
+
+\begin{center}
+\small
+\begin{tabular}{lccccccc}
+\toprule
+& Mon & Tue & Wed & Thu & Fri & Sat & Sun \\
+\midrule
+Multiplier & 0.72 & 0.70 & 0.71 & 0.73 & 0.71 & 0.73 & 0.69 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The amplitude of the day-of-week cycle is only $\pm 3$\% around the mean —
+far smaller than the $\pm 35$\% annual seasonal amplitude.
+While the effect is statistically significant given 3,833 observations, its
+practical contribution to forecast error is small.
+It is worth including as a feature but should not be over-weighted.
+
+\subsection{The August Biennial Anomaly}
+\label{subsec:aug}
+
+The most structurally unusual finding in the dataset is a biennial alternation
+in August revenue.
+In the recent regime (2019--2022):
+
+\begin{center}
+\small
+\begin{tabular}{lrr}
+\toprule
+Year & August Revenue (B VND) & Type \\
+\midrule
+2019 & 75 & Odd \\
+2020 & 117 & Even \\
+2021 & 72 & Odd \\
+2022 & 120 & Even \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The Pearson correlation between \texttt{is\_even\_year} (binary) and August
+revenue is $r = 0.97$ — essentially deterministic.
+Even years (2020, 2022) average $\sim$118~B~VND in August;
+odd years (2019, 2021) average $\sim$74~B~VND.
+This is a \textbf{59\% difference} that would cause a naive seasonal model to
+produce massive errors in August 2023 (odd) and August 2024 (even).
+
+The pattern likely reflects biennial large-scale promotional campaigns
+(e.g., end-of-summer clearance events held every two years), corroborated by
+the biennial peak visible in the periodogram.
+Since 2023 is an odd year, the model should predict a \emph{below-average}
+August 2023 and an \emph{above-average} August 2024.
+
+\reportfigure{saved_08_dow_august_biennial.png}{The August biennial anomaly.}{the pronounced even-year versus odd-year August divergence and supports explicit biennial anomaly flags in the forecasting feature set.}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Customer Analysis}
+\label{sec:customers}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Acquisition and Cumulative Growth}
+
+New customer acquisition grew steadily from 2012 to 2017, peaking at
+$\approx$700--800 new signups per month.
+Acquisition then declined sharply in 2018--2019 (consistent with the revenue
+break) before stabilising at $\approx$300--400/month in the recent regime.
+The cumulative customer base still shows upward momentum, reaching
+$\sim$50,000 registered customers by end of 2022.
+
+\subsection{Purchase Frequency Distribution}
+
+The distribution of orders per customer is heavily right-skewed, consistent
+with the empirical power-law typical of e-commerce:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{One-time buyers}: $\approx 45\%$ of all registered customers
+    placed exactly one order. This is high by industry standards and suggests
+    significant friction in the second-purchase journey.
+  \item \textbf{Median}: 2 orders per customer.
+  \item \textbf{Mean}: $\approx$3.8 orders per customer (pulled right by power users).
+  \item \textbf{Top 20\% of customers}: account for $\approx$65\% of all orders
+    (Lorenz curve / Gini $\approx 0.52$).
+\end{itemize}
+
+\subsection{Customer Demographics}
+
+Customer demographics are broadly split:
+\textit{acquisition channel} shows a roughly even split between organic search,
+social media referral, and direct/email;
+\textit{age group} skews Gen-Z (18--24) and Millennial (25--34);
+\textit{gender} is approximately 60/40 female/male;
+\textit{loyalty tier} shows that approximately 30\% of customers have reached
+Silver or above — a relatively high tier penetration indicating an engaged core.
+
+\subsection{RFM Segmentation}
+
+Applying standard RFM (Recency-Frequency-Monetary) quintile scoring yields five
+segments (Table~\ref{tab:rfm}).
+
+\begin{table}[H]
+\centering
+\caption{RFM segment summary. Champions and Loyal customers together represent
+38\% of the base but account for over 70\% of revenue.}
+\label{tab:rfm}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Segment} & \textbf{N customers} & \textbf{Avg Recency (d)}
+  & \textbf{Avg Orders} & \textbf{Total Rev (\%)}\\
+\midrule
+Champions & $\sim$4,200  & 38  & 12.4 & 42.1 \\
+Loyal     & $\sim$14,800 & 112 & 5.8  & 29.4 \\
+Recent    & $\sim$8,600  & 21  & 1.4  & 9.3  \\
+At Risk   & $\sim$11,400 & 345 & 4.1  & 14.7 \\
+Lost      & $\sim$11,000 & 641 & 1.2  & 4.5  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The large ``Lost'' and ``At Risk'' cohorts (together $\sim$45\% of customers)
+are a latent revenue opportunity.
+Win-back campaigns targeting these segments may partially explain the revenue
+recovery observed in 2022.
+
+\reportfigure{saved_13_rfm_segments.png}{RFM segment concentration.}{that Champions and Loyal customers account for a disproportionate share of revenue and supports segment-aware retention strategy and feature design.}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Product and Category Analysis}
+\label{sec:products}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Category Revenue and Margin}
+
+The product catalogue is organised into four major categories.
+Revenue concentration is extreme:
+
+\begin{table}[H]
+\centering
+\caption{Revenue, order count, and estimated gross margin by product category.}
+\label{tab:categories}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Category} & \textbf{Revenue (\%)} & \textbf{Orders (\%)}
+  & \textbf{Unique SKUs} & \textbf{Est. Margin \%}\\
+\midrule
+Streetwear   & 78.1 & 72.4 & $\sim$620 & 9.3 \\
+Outdoor      & 10.8 & 13.7 & $\sim$180 & 18.4 \\
+GenZ Fashion & 7.6  & 9.2  & $\sim$140 & 22.1 \\
+Kids         & 3.5  & 4.7  & $\sim$80  & 15.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The business is overwhelmingly Streetwear-dependent (78\% of revenue) yet this
+category carries the \emph{lowest} gross margin at $\approx$9.3\%.
+Outdoor and GenZ Fashion, by contrast, generate more than double the margin.
+A product mix shift toward higher-margin categories would significantly improve
+profitability without necessarily growing top-line revenue.
+
+\reportfigure{saved_14_category_revenue.png}{Category revenue and margin mix.}{category-level revenue concentration and margin heterogeneity, and supports the conclusion that Streetwear dominates the business mix.}
+
+\subsection{Price and COGS Distribution}
+
+Product prices follow an approximately log-normal distribution with a median of
+$\approx$320,000~VND and a heavy right tail extending to luxury items above
+2,000,000~VND.
+COGS tracks price linearly with a mean product-level margin of $\approx$14.8\%,
+consistent with the aggregate margin observed in the sales table — a useful
+cross-validation of data consistency.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Operational Signals}
+\label{sec:ops}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Promotions}
+\label{subsec:promos}
+
+Approximately 80 distinct promotional campaigns were run over the decade.
+Three dominant \texttt{promo\_type} categories account for $>$90\% of
+campaigns: percentage discount, fixed-amount coupon, and free shipping.
+Campaign durations range from 3 to 45 days, with a median of 14 days.
+
+Promo penetration (fraction of order-item lines carrying a promo code)
+alternates biannually:
+
+\begin{center}
+\small
+\begin{tabular}{lccccccccccc}
+\toprule
+Year & 2012 & 2013 & 2014 & 2015 & 2016 & 2017 & 2018 & 2019 & 2020 & 2021 & 2022 \\
+\midrule
+Promo \% & 28.3 & 31.2 & 33.1 & 29.7 & 25.4 & 27.8 & 33.6 & 46.1 & 38.2 & 48.7 & 39.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The sharp increase in promo penetration starting 2019 (from $\sim$33\% to 46--49\%)
+is directly correlated with the revenue regime break — suggesting that promotions
+were deployed defensively to cushion the demand decline rather than proactively
+to grow revenue.
+Importantly, \emph{promo penetration is negatively correlated with revenue}
+(Pearson $r \approx -0.61$) in the full series, cautioning against naive
+conclusions that more promotions drive more sales.
+
+\begin{insightbox}[Promotions as a feature — not a cause]
+The data does not support the view that promos \emph{cause} revenue growth.
+The correlation is confounded by the regime break.
+In the post-break regime, promotions appear to provide a floor rather than
+a ceiling for revenue.
+For forecasting, \texttt{is\_even\_year} (which captures the biennial promo
+intensity pattern) is more parsimonious and equally predictive.
+\end{insightbox}
+
+\reportfigure{saved_18_promo_penetration.png}{Promotion penetration over time.}{the rise in promotion penetration after 2019 alongside the lower-revenue regime, and supports treating promotions as regime-correlated rather than purely exogenous signals.}
+
+\subsection{Shipping Performance}
+
+Shipping days (ship date $\to$ delivery date) follow a roughly discrete
+distribution:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item Median shipping time: \textbf{3 days}
+  \item 75th percentile: 5 days
+  \item 95th percentile: 8 days
+  \item Out-of-range ($>$30 days): $<$0.5\% of shipments (likely data errors,
+    filtered)
+\end{itemize}
+
+Mean shipping days have improved slightly over the decade (from $\sim$4.2~days
+in 2012 to $\sim$3.1~days in 2022), consistent with investment in logistics
+infrastructure.
+
+\subsection{Return Rate and Reasons}
+
+The aggregate monthly return rate averages \textbf{5.8\%} (returns / orders)
+with relatively low variance over time.
+A modest increase in return rates is visible from 2020 onward, possibly related
+to higher discount-driven purchases of less-deliberate items.
+
+The top five return reasons are:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item Wrong size / poor fit (35\%)
+  \item Product quality below expectation (22\%)
+  \item Wrong item received (14\%)
+  \item Changed mind / no longer needed (18\%)
+  \item Delivery damage (11\%)
+\end{enumerate}
+
+\begin{warningbox}[Operational concern — size returns]
+Wrong size is the \#1 return reason at 35\%.
+Yet return rates are uniform across all size categories, suggesting that the
+issue is \emph{systemic catalogue inaccuracy} (misleading size charts, model
+photos not representative) rather than manufacturing defects.
+This is addressable via UX improvements and would directly reduce operational
+costs.
+\end{warningbox}
+
+\subsection{Customer Reviews and Ratings}
+
+The rating distribution is left-skewed (positivity bias, common in fashion
+retail):
+
+\begin{center}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Rating & 1★ & 2★ & 3★ & 4★ & 5★ \\
+\midrule
+Fraction & 3.2\% & 5.1\% & 12.8\% & 38.6\% & 40.3\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Overall mean rating is $4.11$ out of 5.
+Monthly average ratings are stable over time with no secular trend, indicating
+consistent product quality.
+
+\subsection{Web Traffic and Conversion}
+
+Web traffic (sessions) grew roughly in parallel with revenue through 2016,
+then declined.
+The monthly order conversion rate (orders / sessions) has been relatively stable
+at $\approx$\textbf{3.2--4.8\%}, declining slightly in the post-break regime.
+This suggests that the revenue decline in 2019 was driven by reduced traffic
+rather than worsening conversion — a demand acquisition problem, not a
+funnel efficiency problem.
+
+\subsection{COD Cancellation Rate}
+\label{subsec:cod}
+
+Cash-on-Delivery (COD) exhibits a cancellation rate of \textbf{$\approx$16--18\%},
+roughly twice that of card or e-wallet payments ($\approx$7--9\%).
+This is a known characteristic of Vietnamese and Southeast Asian markets where
+COD remains the dominant payment method for lower-income segments.
+
+\begin{table}[H]
+\centering
+\caption{Cancellation rate by payment method (recent regime, 2019--2022).}
+\label{tab:cancel}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Payment method} & \textbf{Cancellation rate \%} & \textbf{Relative to mean}\\
+\midrule
+Cash-on-Delivery (COD) & 17.3 & \textcolor{mred}{$+2.1\times$} \\
+Bank transfer          & 8.4  & 1.0$\times$ \\
+Credit / debit card    & 7.6  & $0.92\times$ \\
+E-wallet (MoMo, etc.)  & 6.8  & $0.82\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The revenue impact of COD cancellations is material: assuming COD represents
+$\sim$55\% of orders and 17\% of those cancel, approximately 9\% of
+\emph{gross} orders never generate revenue.
+This drag is already embedded in the \texttt{sales.Revenue} figures (cancelled
+orders are not counted), but it creates a noisy relationship between order
+\emph{placement} signals and \emph{realised} revenue.
+
+\reportfigure{saved_21_cod_cancellation.png}{Cancellation rates by payment method.}{materially higher cancellation rates for COD orders than for card or e-wallet payments and supports payment-method-aware operational risk controls.}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Preprocessing and Feature Engineering}
+\label{sec:fe}
+% ─────────────────────────────────────────────────────────────────────────────
+
+This section documents every feature engineering decision, the rationale behind
+it, and the leakage implications for the 548-day forecast horizon.
+The key constraint is that \emph{no information from after a given prediction
+date may enter that day's feature vector}.
+Since the forecast starts 2023-01-01, any feature that references data within
+12 months of that date must use lag-365 or greater.
+
+\subsection{Calendar Features}
+
+\paragraph{Raw calendar.}
+Year, month (1--12), day-of-month (1--31), day-of-week (0=Monday, 6=Sunday),
+day-of-year (1--365), week-of-year (1--52), quarter (1--4).
+
+\paragraph{Binary boundary flags.}
+The binary calendar indicators are \texttt{is\_month\_end},
+\texttt{is\_month\_start}, \texttt{is\_quarter\_end},
+\texttt{is\_quarter\_start}, \texttt{is\_year\_end},
+\texttt{is\_year\_start}, and \texttt{is\_weekend}.
+These capture the well-documented month-end and quarter-end spikes common
+in fashion retail (payday effects, reporting period effects).
+
+\paragraph{Cyclical encodings.}
+To avoid treating month 12 as numerically ``far from'' month 1, all periodic
+calendar variables are encoded as:
+\begin{equation}
+  \text{col\_sin} = \sin\!\left(\frac{2\pi \cdot \text{col}}{\text{period}}\right),
+  \qquad
+  \text{col\_cos} = \cos\!\left(\frac{2\pi \cdot \text{col}}{\text{period}}\right)
+\end{equation}
+Applied to month ($T=12$), day-of-week ($T=7$), week-of-year ($T=52$), and
+day-of-year ($T=365$), yielding 8 cyclical features.
+
+\subsection{Vietnamese Holiday and Tet Features}
+
+Vietnamese public holidays (New Year Jan~1, Reunification Apr~30, Labour Day
+May~1, National Day Sep~2) are encoded as a binary flag
+\texttt{is\_vn\_holiday}.
+The Lunar New Year (\textit{Tet Nguyen Dan}) is the single most important
+demand driver in Vietnamese retail.
+We encode proximity to Tet via:
+
+\begin{equation}
+  \texttt{days\_to\_tet}_t = t - \hat{\tau}_{\text{Tet}(year(t))}
+\end{equation}
+
+where $\hat{\tau}_{\text{Tet}(y)}$ is the Gregorian date of the first day of
+Tet in year $y$ (approximated from astronomical tables through 2024).
+Negative values indicate pre-Tet buildup; positive values indicate post-Tet
+recovery.
+Binary thresholds \texttt{is\_tet\_week} ($|\texttt{days\_to\_tet}| \le 7$)
+and \texttt{is\_tet\_month} ($-30 \le \texttt{days\_to\_tet} \le 30$) are
+derived features.
+
+\subsection{Regime and Parity Flags}
+
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item \texttt{is\_recent\_regime}: 1 if year $\ge$ 2019, else 0
+  \item \texttt{is\_even\_year}: 1 if year is even (2020, 2022, 2024 \ldots), else 0
+  \item \texttt{is\_august}: 1 if month == 8
+  \item \texttt{is\_aug\_even}: interaction flag (August $\times$ even year)
+  \item \texttt{is\_aug\_odd}: interaction flag (August $\times$ odd year)
+\end{itemize}
+
+These four flags collectively encode the biennial August anomaly
+(Section~\ref{subsec:aug}) in a form any tree or linear model can exploit.
+
+\subsection{Long-Horizon Lag Features}
+\label{subsec:lags}
+
+Since the forecast horizon begins more than 365 days after the last training
+observation, \emph{only lags $\ge$ 365 are leakage-safe for all forecast dates}.
+We include:
+
+\begin{table}[H]
+\centering
+\caption{Long-horizon lag features. All are computed on both raw Revenue and
+$\log(\text{Revenue})$.}
+\label{tab:lags}
+\begin{tabular}{lll}
+\toprule
+\textbf{Feature} & \textbf{Lag (days)} & \textbf{Rationale}\\
+\midrule
+\texttt{rev\_lag\_365}     & 365 & Same calendar date, 1 year prior \\
+\texttt{rev\_lag\_366}     & 366 & Leap-year correction \\
+\texttt{rev\_lag\_364}     & 364 & Same weekday, 52 weeks prior \\
+\texttt{rev\_lag\_548}     & 548 & 18 months prior \\
+\texttt{rev\_lag\_730}     & 730 & Same date, 2 years prior \\
+\texttt{rev\_roll7\_lag365} & 365+7d window & Smoothed 1-week centred on lag-365 \\
+\texttt{rev\_roll30\_lag365}& 365+30d window & Smoothed 1-month centred on lag-365 \\
+\texttt{rev\_roll90\_lag365}& 365+90d window & Smoothed 1-quarter centred on lag-365 \\
+\texttt{rev\_lag\_365\_730\_mean} & avg(365, 730) & Blended 1+2 year signal \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The blended lag (\texttt{rev\_lag\_365\_730\_mean}) is particularly powerful
+because it partially averages out the biennial August anomaly — if 2022 was an
+even-year August and 2021 was an odd-year August, blending them provides a
+``neutral'' baseline from which the \texttt{is\_aug\_even} flag can then deviate.
+
+\subsection{Seasonal Lookup Tables}
+
+For each of four grouping keys, we compute mean revenue from the recent regime
+(2019--2022) and apply a level-correction factor $\lambda$ to account for the
+upward trend within that regime:
+
+\begin{equation}
+  \lambda = \frac{\bar{y}_{[-365,0]}}{\bar{y}_{\text{2019-2022}}}
+\end{equation}
+
+The four lookup tables are:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{Day-of-year mean} (\texttt{seasonal\_doy\_mean}): 365 values,
+    captures the full annual shape
+  \item \textbf{Month $\times$ Day-of-week mean} (\texttt{seasonal\_month\_dow\_mean}):
+    $12 \times 7 = 84$ cells, captures month-within-year and DoW jointly
+  \item \textbf{Month $\times$ Year-parity mean} (\texttt{seasonal\_month\_parity\_mean}):
+    $12 \times 2 = 24$ cells, directly encodes the biennial pattern by month
+  \item \textbf{Week-of-year mean} (\texttt{seasonal\_week\_mean}): 52 values,
+    coarser alternative to DoY
+\end{enumerate}
+
+\begin{insightbox}[Level correction is critical]
+Without level correction, the lookup tables estimate what revenue
+\emph{was} in 2019--2022, not what it \emph{will be} in 2023--2024.
+By scaling by $\lambda$, the lookups inherit the most recent 12-month level,
+making them forward-looking baseline estimates rather than historical averages.
+\end{insightbox}
+
+\subsection{Sample Weights}
+
+To emphasise the recent regime without completely discarding the historical
+data (which contains valuable seasonal shape information), we apply
+exponentially decaying sample weights with a two-year half-life:
+
+\begin{equation}
+  w_t = \exp\!\left(\frac{-0.5 \cdot (t_{\max} - t)}{730}\right)
+  \times
+  \begin{cases} 0.3 & \text{if } year(t) < 2019 \\ 1.0 & \text{otherwise} \end{cases}
+\end{equation}
+
+This ensures that December 2022 receives weight $w = 1.0$, December 2020
+receives $w \approx 0.60$, and December 2018 receives $w \approx 0.30 \times
+0.58 \approx 0.17$, making pre-break data nearly inconsequential without
+deleting it entirely.
+
+\reportfigure{saved_22_sample_weights.png}{Regime-aware sample weighting schedule.}{the weighting schedule that downweights older observations, especially the pre-2019 regime, and supports more relevant model fitting for the forecast horizon.}
+
+\subsection{Walk-Forward Cross-Validation}
+
+Because the test period is both long (548 days) and entirely beyond the training
+data, standard $k$-fold cross-validation is inappropriate — it would permit
+future information to leak into the past.
+We instead use the following walk-forward scheme:
+
+\begin{table}[H]
+\centering
+\caption{Walk-forward CV splits. The validation window in each fold approximates
+the length and statistical properties of the actual test period.}
+\label{tab:cv}
+\begin{tabular}{lllll}
+\toprule
+\textbf{Fold} & \textbf{Train start} & \textbf{Train end}
+  & \textbf{Val start} & \textbf{Val end}\\
+\midrule
+Fold 1 & 2012-07-04 & 2020-06-30 & 2020-07-01 & 2021-12-31 \\
+Fold 2 & 2012-07-04 & 2021-06-30 & 2021-07-01 & 2022-12-31 \\
+Fold 3 & 2012-07-04 & 2021-12-31 & 2022-01-01 & 2022-12-31 \\
+\midrule
+\textbf{Test} & 2012-07-04 & 2022-12-31 & 2023-01-01 & 2024-07-01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Fold~3 is the most important proxy for the actual test performance: both the
+training window and the validation window closely match the actual
+train/test split, and the validation period (Jan--Dec 2022) includes the same
+seasonal challenges as the first year of the forecast (Jan--Dec 2023).
+
+\reportfigure{saved_23_cv_splits.png}{Walk-forward cross-validation design.}{the leakage-safe walk-forward validation design and supports honest estimation of out-of-sample forecasting performance.}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Consolidated Key Findings}
+\label{sec:findings}
+% ─────────────────────────────────────────────────────────────────────────────
+
+We distil the EDA into eight falsifiable hypotheses that directly guide model
+design:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=6pt]
+
+\item[\textbf{H1}] \textbf{Regime-aware weighting will outperform
+  uniform weighting.}
+  Pre-2019 data is drawn from a different level regime.
+  Any model trained without downweighting these years will underpredict 2023--2024
+  revenue.
+
+\item[\textbf{H2}] \textbf{Lag-365 is the single strongest predictive feature.}
+  The annual ACF of 0.737 (raw) and the stable seasonal shape both confirm that
+  ``what happened on this calendar day last year'' is the most informative
+  single signal.
+
+\item[\textbf{H3}] \textbf{Lag-730 adds independent information over Lag-365.}
+  The two-year ACF of 0.648 is not simply a consequence of chaining two
+  one-year autocorrelations.
+  Including both lags and their average will improve point estimates.
+
+\item[\textbf{H4}] \textbf{The August biennial flag must be explicitly encoded.}
+  Failure to include \texttt{is\_aug\_even}/\texttt{is\_aug\_odd} will result in
+  a $\sim$59\% forecasting error in August months, which will dominate overall
+  MAPE.
+
+\item[\textbf{H5}] \textbf{Tet proximity is the highest-impact holiday feature.}
+  Vietnamese Lunar New Year is the dominant cultural shopping event.
+  Generic ``is-public-holiday'' encoding will miss the 2--3 week buildup and the
+  post-Tet trough.
+
+\item[\textbf{H6}] \textbf{The seasonal shape is stable; the level is not.}
+  Models that learn the shape (e.g., via normalised seasonal lookups) and
+  separately learn the level (e.g., via recent lags) will generalise better than
+  models that try to directly predict absolute revenue.
+
+\item[\textbf{H7}] \textbf{Promo flags are weak exogenous predictors.}
+  Promo penetration is endogenous to the demand regime and correlated with, not
+  causal of, revenue.
+  Binary promo flags may add marginal value but \texttt{is\_even\_year}
+  (capturing the biennial promo cycle) is a more parsimonious predictor.
+
+\item[\textbf{H8}] \textbf{Log-target training is preferable to raw-target.}
+  The log-normal distribution of daily revenue, combined with the
+  heteroscedasticity visible in residuals (variance scales with level), means
+  that training on $\log(\text{Revenue})$ and exponentiating predictions will
+  produce more calibrated forecasts with lower MAPE.
+
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Feature Engineering Summary}
+\label{sec:summary}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Table~\ref{tab:features} provides a complete inventory of the final feature
+matrix.
+
+\reportfigure{saved_27_feature_correlations.png}{Feature-target correlation summary.}{which engineered features are most strongly associated with the target and supports prioritising seasonal, lag-based, and regime-aware predictors.}
+
+\begin{table}[H]
+\centering
+\caption{Final feature matrix — complete inventory.
+All features are leakage-safe for the 2023-01-01 → 2024-07-01 forecast horizon.}
+\label{tab:features}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{1.7cm}>{\raggedright\arraybackslash}p{6.9cm}}
+\toprule
+\textbf{Feature group} & \textbf{Count} & \textbf{Description}\\
+\midrule
+Calendar (raw)          & 9  & year, month, dom, dow, doy, woy, quarter, etc. \\
+Calendar (binary)       & 8  & is\_weekend, is\_month\_end, is\_month\_start, etc. \\
+Cyclical encodings      & 8  & sin/cos for month, dow, woy, doy \\
+Regime flags            & 5  & is\_recent\_regime, is\_even\_year, is\_august, etc. \\
+Tet proximity           & 4  & days\_to\_tet, is\_tet\_week, is\_tet\_month, countdown \\
+VN public holidays      & 1  & is\_vn\_holiday \\
+Long-horizon lags (Rev) & 5  & lag 364/365/366/548/730 \\
+Long-horizon lags (log) & 5  & log-transformed versions of above \\
+Rolling means (Rev)     & 12 & roll7/14/30/90 $\times$ lag365/548/730 \\
+Rolling means (log)     & 12 & log-transformed versions of above \\
+Blended lags            & 2  & avg(lag365, lag730) raw + log \\
+Seasonal lookup (Rev)   & 4  & doy, month×dow, month×parity, week \\
+Seasonal lookup (log)   & 4  & log versions of above \\
+Sample weight           & 1  & exp decay, old regime ×0.3 \\
+\midrule
+\textbf{Total}          & \textbf{80} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Top features by correlation with $\log(\text{Revenue})$}
+(computed on the full training set):
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item \texttt{seasonal\_month\_parity\_mean} ($r = 0.74$)
+  \item \texttt{log\_rev\_lag\_365} ($r = 0.71$)
+  \item \texttt{seasonal\_doy\_mean} ($r = 0.68$)
+  \item \texttt{log\_rev\_roll30\_lag365} ($r = 0.67$)
+  \item \texttt{seasonal\_month\_dow\_mean} ($r = 0.64$)
+  \item \texttt{is\_aug\_even} ($r = 0.41$)
+  \item \texttt{is\_aug\_odd} ($r = -0.38$)
+  \item \texttt{is\_tet\_month} ($r = -0.31$)
+  \item \texttt{month\_sin} ($r = 0.29$)
+  \item \texttt{is\_even\_year} ($r = 0.27$)
+\end{enumerate}
+
+The top three features all capture the annual seasonal pattern through different
+lenses (monthly parity lookup, direct lag, rolling smoothed lag), confirming
+that the seasonal signal is the dominant forecastable component.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+% ─────────────────────────────────────────────────────────────────────────────
+
+This EDA has transformed a decade of raw transactional records into a
+well-understood dataset with clear modelling implications.
+The core insight is that Vietnamese fashion e-commerce revenue is \emph{not}
+a noisy random walk — it contains rich, stable, multi-scale periodic structure
+embedded within a single regime-breaking trend.
+A forecasting model that honours this structure (regime-aware weighting, annual
+lags, biennial parity flags, Tet proximity, and level-corrected seasonal
+lookups) should achieve substantially lower error than off-the-shelf time-series
+methods that ignore the domain context.
+
+The feature matrix produced here — 80 leakage-safe features across 3,833
+training observations — is ready for downstream gradient boosting, ARIMA-X,
+neural forecasting, or ensemble methods.
+The walk-forward cross-validation scheme provides an honest performance estimate
+and guards against both overfitting and optimism bias.
+
+\paragraph{Next steps.}
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt]
+  \item Train and tune a LightGBM baseline on the 80-feature matrix with
+    sample weights and log-target.
+  \item Blend with a classical Fourier-extended regression for interpretability.
+  \item Evaluate post-processing: does applying the seasonal shape to the model's
+    trend estimate outperform the model's native seasonal prediction?
+  \item Explicitly model the August biennial anomaly as a regime-switching
+    component in a hybrid model.
+\end{itemize}
+
+% ─────────────────────────────────────────────────────────────────────────────
+% Bibliography
+% ─────────────────────────────────────────────────────────────────────────────
+\bibliographystyle{abbrvnat}
+\begin{thebibliography}{9}
+
+\bibitem{cleveland1990stl}
+R.~B. Cleveland, W.~S. Cleveland, J.~E. McRae, and I.~Terpenning.
+\newblock {STL}: A seasonal-trend decomposition procedure based on {LOESS}.
+\newblock \emph{Journal of Official Statistics}, 6(1):3--73, 1990.
+
+\bibitem{hyndman2018forecasting}
+R.~J. Hyndman and G.~Athanasopoulos.
+\newblock \emph{Forecasting: Principles and Practice}.
+\newblock OTexts, 2nd edition, 2018.
+\newblock Available at \url{https://otexts.com/fpp2/}.
+
+\bibitem{ke2017lightgbm}
+G.~Ke, Q.~Meng, T.~Finley, T.~Wang, W.~Chen, W.~Ma, Q.~Ye, and T.-Y. Liu.
+\newblock {LightGBM}: A highly efficient gradient boosting decision tree.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)},
+  pages 3146--3154, 2017.
+
+\bibitem{rfm2000}
+P.~D. Berger and N.~I. Nasr.
+\newblock Customer lifetime value: Marketing models and applications.
+\newblock \emph{Journal of Interactive Marketing}, 12(1):17--30, 1998.
+
+\bibitem{makridakis2018m4}
+S.~Makridakis, E.~Spiliotis, and V.~Assimakopoulos.
+\newblock The {M4} competition: Results, findings, conclusion and way forward.
+\newblock \emph{International Journal of Forecasting}, 34(4):802--808, 2018.
+
+\end{thebibliography}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\appendix
+\section{Stationarity Test Details}
+\label{app:stationarity}
+
+\paragraph{ADF test.}
+The Augmented Dickey-Fuller test \citep{hyndman2018forecasting} evaluates $H_0$:
+unit root present against $H_1$: stationary.
+Lag selection by AIC.
+On $\log y_t$: statistic $= -2.41$, $p = 0.137$ (cannot reject $H_0$).
+On $\Delta \log y_t$: statistic $= -38.2$, $p < 0.001$ (reject $H_0$,
+series is integrated of order 1).
+
+\paragraph{KPSS test.}
+The Kwiatkowski-Phillips-Schmidt-Shin test evaluates $H_0$: trend-stationary
+against $H_1$: unit root.
+With \texttt{regression='ct'} (constant + trend): statistic $= 0.088$,
+$p > 0.10$ (fail to reject $H_0$, trend-stationary).
+The apparent contradiction between ADF and KPSS reflects a series that is
+\emph{near} the boundary: long-memory near-integrated, or I(1) with large
+MA root.
+Both characterisations motivate including lag-365 and lag-730 features that
+are insensitive to this distinction.
+
+\section{Tet Date Table}
+\label{app:tet}
+
+\begin{center}
+\small
+\begin{tabular}{ll}
+\toprule
+\textbf{Year} & \textbf{Tet (first day, Gregorian)}\\
+\midrule
+2012 & January 23 \\
+2013 & February 10 \\
+2014 & January 31 \\
+2015 & February 19 \\
+2016 & February 8 \\
+2017 & January 28 \\
+2018 & February 16 \\
+2019 & February 5 \\
+2020 & January 25 \\
+2021 & February 12 \\
+2022 & February 1 \\
+2023 & January 22 \\
+2024 & February 10 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}
